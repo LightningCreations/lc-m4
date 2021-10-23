@@ -55,12 +55,12 @@ fn parse_args<I: Iterator<Item = String>>(mut args: I) -> (String, Vec<Flag>) {
                 },
             )));
         } else if let Some(reload_state) = arg.strip_prefix("--reload-state=") {
-            flags.push(Flag::ReloadState(Box::new(File::open(&reload_state).unwrap_or_else(
-                |_| {
+            flags.push(Flag::ReloadState(Box::new(
+                File::open(&reload_state).unwrap_or_else(|_| {
                     eprintln!("Couldn't open file {} for reading!", &arg);
                     process::exit(1);
-                },
-            ))));
+                }),
+            )));
         } else if let Some(traced) = arg.strip_prefix("--trace=") {
             flags.push(Flag::Trace(traced.into()));
         } else if let Some(undef) = arg.strip_prefix("--undefine=") {
@@ -87,8 +87,16 @@ fn parse_args<I: Iterator<Item = String>>(mut args: I) -> (String, Vec<Flag>) {
     (prg_name, flags)
 }
 
-fn read_int<F: Read>(data: &mut Iterator<Item = u8>, sep: u8) {
-
+fn read_int<I: Iterator<Item = u8>>(data: &mut I, sep: u8) -> u32 {
+    let mut result: u32 = 0;
+    while let Some(c) = data.next() {
+        if c == sep {
+            break;
+        }
+        result *= 10;
+        result += (c - b'0') as u32;
+    }
+    result
 }
 
 fn exec_file<F: Read>(file: &mut F) {
@@ -108,21 +116,30 @@ fn exec_reload_state<F: Read>(file: &mut F) {
     });
     let mut comment_start: u8 = b'#';
     let mut comment_end: u8 = b'\n';
-    let mut data = data.iter();
-    while let Some(&c) = data.next() {
+    let mut data = data.iter().copied();
+    while let Some(c) = data.next() {
         if c == comment_start {
-            while let Some(&c) = data.next() {
-                if c == comment_end { break; }
+            while let Some(c) = data.next() {
+                if c == comment_end {
+                    break;
+                }
             }
         } else if c == b'C' {
-            let slen = read_int(data, ',');
-            let elen = read_int(data, '\n');
+            let slen = read_int(&mut data, b',');
+            let elen = read_int(&mut data, b'\n');
             if slen != 1 || elen != 1 {
-                println!("Comment with multiple-character delimiters? Unheard of!");
+                eprintln!("Comment with multiple-character delimiters? Unheard of!");
+                process::exit(1);
+            }
+            comment_start = data.next().unwrap_or(b'#');
+            comment_end = data.next().unwrap_or(b'\n');
+            let c = data.next();
+            if matches!(c, None) || !matches!(c, Some(b'\n')) {
+                eprintln!("Syntax error in reload state file: missing newline after C declaration");
                 process::exit(1);
             }
         } else {
-            print!("{}", c);
+            print!("{}", c as char);
         }
     }
 }
@@ -150,7 +167,7 @@ fn main() {
                 exec_file(&mut x);
             }
             Flag::GnulyCorrect(_) => {} // We don't care yet
-            Flag::IncludePath(_) => {} // We don't care yet
+            Flag::IncludePath(_) => {}  // We don't care yet
             Flag::NestingLimit(x) => nesting_limit = x,
             Flag::ReloadState(mut x) => {
                 exec_reload_state(&mut x);
